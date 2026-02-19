@@ -45,12 +45,25 @@ mypy src
 ## Features
 
 - Real-scale physical values for solar-system bodies (mass, distance, radius)
+- Planet initialization from JPL Keplerian elements (inclination + eccentricity)
 - Newtonian gravity with velocity-Verlet integration
 - Live controls on the left panel:
   - Gravity multiplier
+  - Start date (used for initial state and restart epoch)
   - Simulation time scaling
   - Show/hide orbit paths
   - Show/hide planet labels
+  - Start/Stop simulation
+  - Restart simulation
+- Orbit trails fade over one full revolution for each planet
+- Camera controls on the simulation canvas:
+  - Mouse wheel to zoom in/out
+  - Middle mouse drag to rotate and tilt around the sun
+- A solar-plane grid box that rotates/tilts with camera movement
+- View mode toggle:
+  - Orthographic
+  - Perspective
+  - Default: Perspective enabled
 - Readable labels even when bodies are visually tiny
 
 ## Project Layout
@@ -59,12 +72,15 @@ mypy src
 src/solar_sim/
   __main__.py        # CLI entrypoint
   app.py             # Main window composition
+  camera.py          # Camera interaction + projection math
   config.py          # Mutable simulation settings
   math2d.py          # Vector math helpers
-  physics.py         # Body models + integrator + defaults
+  math3d.py          # 3D vector math helpers
+  physics.py         # Body models + 3D integrator + element-based defaults
   ui_canvas.py       # Simulation rendering widget
   ui_controls.py     # Left-side controls widget
 tests/
+  test_camera.py
   test_config.py
   test_physics.py
 AGENTS.md
@@ -75,6 +91,6 @@ pyproject.toml
 ## Design Notes
 
 - Simulation math uses physical SI units.
+- Initial planetary states are derived from JPL approximate orbital element tables.
 - Rendering uses `meters_per_pixel` scaling, so the world remains physically meaningful while still viewable on a desktop.
-- Time scale is accelerated by default (`86400` simulated seconds per real second) so orbital motion is visible.
-
+- Time scale is accelerated by default (`864000` simulated seconds per real second) so orbital motion is visible.

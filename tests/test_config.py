@@ -1,5 +1,7 @@
 """Unit tests for mutable simulation settings."""
 
+from datetime import date
+
 from solar_sim.config import SimulationSettings
 
 
@@ -25,3 +27,24 @@ def test_toggle_flags_are_mutable() -> None:
     assert settings.show_orbits is False
     assert settings.show_labels is False
 
+
+def test_projection_mode_updates() -> None:
+    """Projection mode should switch between orthographic and perspective."""
+    settings = SimulationSettings()
+    settings.set_projection_mode("perspective")
+    assert settings.projection_mode == "perspective"
+
+
+def test_defaults_match_ui_expectations() -> None:
+    """Default settings should match startup control defaults."""
+    settings = SimulationSettings()
+    assert settings.time_scale_seconds_per_second == 864_000.0
+    assert settings.projection_mode == "perspective"
+
+
+def test_start_date_updates() -> None:
+    """Start date setter should update simulation epoch date."""
+    settings = SimulationSettings()
+    value = date(2024, 1, 7)
+    settings.set_start_date(value)
+    assert settings.start_date == value

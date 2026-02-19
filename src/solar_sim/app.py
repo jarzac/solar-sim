@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
+from PySide6.QtCore import QDate
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QWidget
 
-from solar_sim.config import SimulationSettings
-from solar_sim.physics import create_default_solar_system
+from solar_sim.config import ProjectionMode, SimulationSettings
+from solar_sim.physics import SolarSystem, create_default_solar_system
 from solar_sim.ui_canvas import SimulationCanvas
 from solar_sim.ui_controls import ControlPanel
 
@@ -32,20 +34,31 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Solar Sim")
 
         self.settings = SimulationSettings()
-        self.system = create_default_solar_system()
+        self.system = self._create_system_for_start_date()
 
-        panel = ControlPanel(self)
-        canvas = SimulationCanvas(self.system, self.settings, self)
+        self._panel = ControlPanel(self)
+        self._canvas = SimulationCanvas(self.system, self.settings, self)
 
-        panel.gravity_multiplier_changed.connect(self._on_gravity_changed)
-        panel.time_scale_changed.connect(self._on_time_scale_changed)
-        panel.show_orbits_changed.connect(self._on_show_orbits_changed)
-        panel.show_labels_changed.connect(self._on_show_labels_changed)
+        self._panel.gravity_multiplier_changed.connect(self._on_gravity_changed)
+        self._panel.time_scale_changed.connect(self._on_time_scale_changed)
+        self._panel.show_orbits_changed.connect(self._on_show_orbits_changed)
+        self._panel.show_labels_changed.connect(self._on_show_labels_changed)
+        self._panel.perspective_view_changed.connect(self._on_perspective_view_changed)
+        self._panel.simulation_running_changed.connect(self._on_simulation_running_changed)
+        self._panel.restart_requested.connect(self._on_restart_requested)
+        self._panel.start_date_changed.connect(self._on_start_date_changed)
+        self._panel.set_start_date(
+            QDate(
+                self.settings.start_date.year,
+                self.settings.start_date.month,
+                self.settings.start_date.day,
+            )
+        )
 
         root = QWidget(self)
         layout = QHBoxLayout()
-        layout.addWidget(panel)
-        layout.addWidget(canvas, 1)
+        layout.addWidget(self._panel)
+        layout.addWidget(self._canvas, 1)
         root.setLayout(layout)
         self.setCentralWidget(root)
         self.resize(1440, 900)
@@ -66,6 +79,32 @@ class MainWindow(QMainWindow):
     def _on_show_labels_changed(self, enabled: bool) -> None:
         """Handle label visibility updates."""
         self.settings.set_show_labels(enabled)
+
+    def _on_perspective_view_changed(self, enabled: bool) -> None:
+        """Switch between orthographic and perspective projection."""
+        mode: ProjectionMode = "perspective" if enabled else "orthographic"
+        self.settings.set_projection_mode(mode)
+
+    def _on_simulation_running_changed(self, running: bool) -> None:
+        """Handle simulation pause/resume."""
+        self._canvas.set_running(running)
+
+    def _on_restart_requested(self) -> None:
+        """Reset the simulation back to a fresh solar-system state."""
+        self.system = self._create_system_for_start_date()
+        self.system.set_gravity_multiplier(self.settings.gravity_multiplier)
+        self._canvas.set_system(self.system)
+        self._canvas.set_running(True)
+        self._panel.set_simulation_running(True)
+
+    def _on_start_date_changed(self, value: str) -> None:
+        """Update simulation epoch date used for initial and restart state."""
+        self.settings.set_start_date(date.fromisoformat(value))
+
+    def _create_system_for_start_date(self) -> SolarSystem:
+        """Create system state seeded by configured start date."""
+        epoch_utc = datetime.combine(self.settings.start_date, datetime.min.time(), tzinfo=UTC)
+        return create_default_solar_system(epoch_utc)
 
 
 def run() -> int:

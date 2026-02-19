@@ -2,6 +2,6 @@
 
 __all__ = [
     "config",
+    "math3d",
     "physics",
 ]
-
