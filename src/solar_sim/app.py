@@ -25,9 +25,9 @@ class MainWindow(QMainWindow):
         canvas = SimulationCanvas(self.system, self.settings, self)
 
         panel.gravity_multiplier_changed.connect(self._on_gravity_changed)
-        panel.time_scale_changed.connect(self.settings.set_time_scale)
-        panel.show_orbits_changed.connect(self.settings.set_show_orbits)
-        panel.show_labels_changed.connect(self.settings.set_show_labels)
+        panel.time_scale_changed.connect(self._on_time_scale_changed)
+        panel.show_orbits_changed.connect(self._on_show_orbits_changed)
+        panel.show_labels_changed.connect(self._on_show_labels_changed)
 
         root = QWidget(self)
         layout = QHBoxLayout()
@@ -42,6 +42,18 @@ class MainWindow(QMainWindow):
         self.settings.set_gravity_multiplier(value)
         self.system.set_gravity_multiplier(self.settings.gravity_multiplier)
 
+    def _on_time_scale_changed(self, value: float) -> None:
+        """Handle UI updates to simulation speed."""
+        self.settings.set_time_scale(value)
+
+    def _on_show_orbits_changed(self, enabled: bool) -> None:
+        """Handle orbit-path visibility updates."""
+        self.settings.set_show_orbits(enabled)
+
+    def _on_show_labels_changed(self, enabled: bool) -> None:
+        """Handle label visibility updates."""
+        self.settings.set_show_labels(enabled)
+
 
 def run() -> int:
     """Start the Qt event loop and return process status."""
@@ -52,4 +64,3 @@ def run() -> int:
     window = MainWindow()
     window.show()
     return app.exec()
-
