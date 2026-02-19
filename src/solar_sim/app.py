@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import cast
+
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QWidget
 
 from solar_sim.config import SimulationSettings
@@ -10,13 +14,22 @@ from solar_sim.ui_canvas import SimulationCanvas
 from solar_sim.ui_controls import ControlPanel
 
 
+def load_app_icon() -> QIcon:
+    """Return the packaged application icon if available."""
+    icon_path = Path(__file__).parent / "assets" / "saturn.svg"
+    icon = QIcon(str(icon_path))
+    if icon.isNull():
+        return QIcon()
+    return icon
+
+
 class MainWindow(QMainWindow):
     """Main desktop window containing controls and simulation canvas."""
 
     def __init__(self) -> None:
         """Build the app layout and connect signals."""
         super().__init__()
-        self.setWindowTitle("Solar System Simulation")
+        self.setWindowTitle("Solar Sim")
 
         self.settings = SimulationSettings()
         self.system = create_default_solar_system()
@@ -57,10 +70,15 @@ class MainWindow(QMainWindow):
 
 def run() -> int:
     """Start the Qt event loop and return process status."""
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
+    app_instance = QApplication.instance()
+    app = QApplication([]) if app_instance is None else cast(QApplication, app_instance)
+
+    icon = load_app_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
     window = MainWindow()
+    if not icon.isNull():
+        window.setWindowIcon(icon)
     window.show()
     return app.exec()
