@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from math import isclose
 
+import pytest
+
 from solar_sim.math3d import Vector3
 from solar_sim.physics import (
     ASTRONOMICAL_UNIT_METERS,
@@ -118,3 +120,219 @@ def test_default_planets_have_orbital_period_for_fading() -> None:
             continue
         assert body.orbital_period_s is not None
         assert body.orbital_period_s > 0.0
+
+
+def test_solar_system_requires_at_least_one_body() -> None:
+    """Empty body list should raise ValueError."""
+    with pytest.raises(ValueError, match="at least one"):
+        SolarSystem([])
+
+
+def test_step_non_positive_dt_is_noop() -> None:
+    """Zero or negative dt should not advance time or positions."""
+    body = CelestialBody(
+        name="Probe",
+        mass_kg=1.0,
+        radius_m=1.0,
+        color_hex="#ffffff",
+        position_m=Vector3(3.0, 4.0, 5.0),
+        velocity_m_per_s=Vector3(1.0, 0.0, 0.0),
+    )
+    system = SolarSystem([body])
+    pos_before = Vector3(body.position_m.x, body.position_m.y, body.position_m.z)
+    system.step(0.0)
+    assert system.simulation_time_s == 0.0
+    assert body.position_m == pos_before
+
+    system.step(-1.0)
+    assert system.simulation_time_s == 0.0
+    assert body.position_m == pos_before
+
+
+def test_set_gravity_multiplier_clamps_negative() -> None:
+    """SolarSystem.set_gravity_multiplier should clamp to zero."""
+    body = CelestialBody(
+        name="Probe",
+        mass_kg=1.0,
+        radius_m=1.0,
+        color_hex="#ffffff",
+        position_m=Vector3(0.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    system = SolarSystem([body])
+    system.set_gravity_multiplier(-2.0)
+    assert system.gravity_multiplier == 0.0
+
+
+def test_zero_gravity_multiplier_zeroes_accelerations() -> None:
+    """With gravity multiplier zero, pairwise gravity should vanish."""
+    sun = CelestialBody(
+        name="Sun",
+        mass_kg=1.9885e30,
+        radius_m=1.0,
+        color_hex="#fff000",
+        position_m=Vector3(0.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    earth = CelestialBody(
+        name="Earth",
+        mass_kg=5.9722e24,
+        radius_m=1.0,
+        color_hex="#00aaff",
+        position_m=Vector3(ASTRONOMICAL_UNIT_METERS, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    system = SolarSystem([sun, earth])
+    system.set_gravity_multiplier(0.0)
+    accs = system.compute_accelerations()
+    assert accs[0].magnitude() == 0.0
+    assert accs[1].magnitude() == 0.0
+
+
+def test_gravity_multiplier_scales_acceleration() -> None:
+    """Doubling gravity multiplier should double acceleration magnitude."""
+    sun = CelestialBody(
+        name="Sun",
+        mass_kg=1.9885e30,
+        radius_m=1.0,
+        color_hex="#fff000",
+        position_m=Vector3(0.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    earth = CelestialBody(
+        name="Earth",
+        mass_kg=5.9722e24,
+        radius_m=1.0,
+        color_hex="#00aaff",
+        position_m=Vector3(ASTRONOMICAL_UNIT_METERS, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    system = SolarSystem([sun, earth])
+    mag_one = system.compute_accelerations()[1].magnitude()
+    system.set_gravity_multiplier(2.0)
+    mag_two = system.compute_accelerations()[1].magnitude()
+    assert isclose(mag_two / mag_one, 2.0, rel_tol=1e-12)
+
+
+def test_overlapping_positions_skip_pairwise_term() -> None:
+    """Zero distance between distinct bodies should skip that pair (no NaNs)."""
+    a = CelestialBody(
+        name="A",
+        mass_kg=1.0,
+        radius_m=1.0,
+        color_hex="#ffffff",
+        position_m=Vector3(1.0, 2.0, 3.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    b = CelestialBody(
+        name="B",
+        mass_kg=2.0,
+        radius_m=1.0,
+        color_hex="#ffffff",
+        position_m=Vector3(1.0, 2.0, 3.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    system = SolarSystem([a, b])
+    accs = system.compute_accelerations()
+    assert accs[0].magnitude() == 0.0
+    assert accs[1].magnitude() == 0.0
+
+
+def test_compute_accelerations_respects_custom_positions() -> None:
+    """Optional positions list should be used instead of body positions."""
+    sun = CelestialBody(
+        name="Sun",
+        mass_kg=1.9885e30,
+        radius_m=1.0,
+        color_hex="#fff000",
+        position_m=Vector3(0.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    earth = CelestialBody(
+        name="Earth",
+        mass_kg=5.9722e24,
+        radius_m=1.0,
+        color_hex="#00aaff",
+        position_m=Vector3(0.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    system = SolarSystem([sun, earth])
+    acc_at_au = system.compute_accelerations(
+        [Vector3(0.0, 0.0, 0.0), Vector3(ASTRONOMICAL_UNIT_METERS, 0.0, 0.0)]
+    )[1]
+    assert acc_at_au.x < 0.0
+    assert isclose(acc_at_au.y, 0.0, abs_tol=1e-12)
+
+
+def test_two_body_acceleration_ratio_matches_mass_ratio() -> None:
+    """|a1|/|a2| should equal m2/m1 for two isolated masses on the x-axis."""
+    m1 = 3.0e26
+    m2 = 2.0e24
+    r = 4.0e11
+    b1 = CelestialBody(
+        name="Heavy",
+        mass_kg=m1,
+        radius_m=1.0,
+        color_hex="#fff",
+        position_m=Vector3(0.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    b2 = CelestialBody(
+        name="Light",
+        mass_kg=m2,
+        radius_m=1.0,
+        color_hex="#fff",
+        position_m=Vector3(r, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    system = SolarSystem([b1, b2])
+    acc1, acc2 = system.compute_accelerations()
+    assert isclose(acc1.magnitude() / acc2.magnitude(), m2 / m1, rel_tol=1e-9)
+    assert acc1.x > 0.0
+    assert acc2.x < 0.0
+
+
+def test_trail_sampling_throttles_when_period_positive() -> None:
+    """Trail append should respect trail_sample_period_s when set above zero."""
+    body = CelestialBody(
+        name="Probe",
+        mass_kg=1.0,
+        radius_m=1.0,
+        color_hex="#ffffff",
+        position_m=Vector3(0.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(1.0, 0.0, 0.0),
+        orbital_period_s=None,
+        trail_sample_period_s=10.0,
+    )
+    system = SolarSystem([body], trail_limit=100)
+    for _ in range(10):
+        system.step(1.0)
+    assert len(body.trail) == 1
+
+    system.step(1.0)
+    assert len(body.trail) == 2
+
+
+def test_trail_without_orbital_period_not_cut_by_age() -> None:
+    """With orbital_period_s None, trail should only be bounded by trail_limit."""
+    body = CelestialBody(
+        name="Probe",
+        mass_kg=1.0,
+        radius_m=1.0,
+        color_hex="#ffffff",
+        position_m=Vector3(0.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(1.0, 0.0, 0.0),
+        orbital_period_s=None,
+        trail_sample_period_s=0.0,
+    )
+    system = SolarSystem([body], trail_limit=5)
+    for _ in range(10):
+        system.step(1.0)
+    assert len(body.trail) == 5
+
+
+def test_create_default_solar_system_accepts_none_epoch() -> None:
+    """None epoch should use current UTC (smoke: nine bodies returned)."""
+    system = create_default_solar_system(None)
+    assert len(system.bodies) == 9
+    assert system.bodies[0].name == "Sun"

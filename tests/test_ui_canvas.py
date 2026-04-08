@@ -5,6 +5,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QPointingDevice
 from PySide6.QtWidgets import QApplication
 
 from solar_sim.config import SimulationSettings
@@ -226,10 +227,126 @@ def test_screen_projection_is_centered_on_system_center_of_mass() -> None:
     canvas.camera.pitch_radians = 0.0
     canvas.resize(1000, 800)
 
-    center_of_mass = ((body_a.position_m.x * body_a.mass_kg) + (body_b.position_m.x * body_b.mass_kg)) / 3.0
+    center_of_mass = (
+        (body_a.position_m.x * body_a.mass_kg) + (body_b.position_m.x * body_b.mass_kg)
+    ) / 3.0
     point_a = canvas._to_screen_point(body_a.position_m)
     expected_x = (canvas.width() * 0.5) + (body_a.position_m.x - center_of_mass)
     assert point_a.x() == expected_x
+
+
+def test_wheel_zoom_steps_prefers_angle_delta() -> None:
+    """_wheel_zoom_steps should map Qt angle delta to wheel steps."""
+    canvas = _make_canvas()
+    event = _FakeWheelEvent(
+        device=None,
+        angle_delta=_FakeDelta(0.0, 240.0),
+    )
+    assert canvas._wheel_zoom_steps(event) == 2.0
+
+
+def test_wheel_zoom_steps_falls_back_to_pixel_delta() -> None:
+    """When angle delta is zero, pixel delta should drive zoom steps."""
+    canvas = _make_canvas()
+    event = _FakeWheelEvent(
+        device=None,
+        angle_delta=_FakeDelta(0.0, 0.0),
+        pixel_delta=_FakeDelta(0.0, 80.0),
+    )
+    assert canvas._wheel_zoom_steps(event) == 2.0
+
+
+def test_apply_trackpad_orbit_noop_when_delta_zero() -> None:
+    """Zero pan delta should not change camera state."""
+    canvas = _make_canvas()
+    yaw_before = canvas.camera.yaw_radians
+    pitch_before = canvas.camera.pitch_radians
+    canvas._apply_trackpad_orbit(0.0, 0.0)
+    assert canvas.camera.yaw_radians == yaw_before
+    assert canvas.camera.pitch_radians == pitch_before
+
+
+def test_mouse_wheel_zooms_without_touchpad_device() -> None:
+    """Non-touchpad wheel events should use angle delta for zoom."""
+    canvas = _make_canvas()
+    mouse = _FakeDevice(QPointingDevice.DeviceType.Mouse)
+    event = _FakeWheelEvent(device=mouse, angle_delta=_FakeDelta(0.0, 120.0))
+    before = canvas.camera.zoom_factor
+    canvas.wheelEvent(event)
+    assert canvas.camera.zoom_factor > before
+    assert event.accepted is True
+
+
+def test_touchpad_scroll_uses_angle_when_pixel_delta_null() -> None:
+    """Touchpad may send angle deltas without pixel deltas for orbit."""
+    canvas = _make_canvas()
+    touchpad = _FakeDevice(canvas._TOUCHPAD_DEVICE_TYPE)
+    event = _FakeWheelEvent(
+        device=touchpad,
+        pixel_delta=_FakeDelta(0.0, 0.0),
+        angle_delta=_FakeDelta(8.0, -8.0),
+    )
+    calls: list[tuple[float, float]] = []
+
+    def _record_orbit(x: float, y: float) -> None:
+        calls.append((x, y))
+
+    canvas._apply_trackpad_orbit = _record_orbit  # type: ignore[method-assign]
+    canvas._last_native_gesture_time_s = None
+
+    canvas.wheelEvent(event)
+
+    assert calls == [(1.0, -1.0)]
+    assert event.accepted is True
+
+
+def test_native_pan_gesture_applies_orbit_delta() -> None:
+    """Pan native gesture should forward signed deltas to trackpad orbit."""
+    canvas = _make_canvas()
+    native_event = _FakeNativeGestureEvent(
+        Qt.NativeGestureType.PanNativeGesture,
+        delta=QPointF(5.0, -3.0),
+    )
+    calls: list[tuple[float, float]] = []
+
+    def _record_orbit(x: float, y: float) -> None:
+        calls.append((x, y))
+
+    canvas._apply_trackpad_orbit = _record_orbit  # type: ignore[method-assign]
+
+    handled = canvas.event(native_event)
+
+    assert handled is True
+    assert calls == [(5.0, -3.0)]
+    assert native_event.accepted is True
+
+
+def test_native_rotate_gesture_adjusts_yaw() -> None:
+    """Rotate native gesture should change yaw via orbit_by_drag."""
+    canvas = _make_canvas()
+    yaw_before = canvas.camera.yaw_radians
+    pitch_before = canvas.camera.pitch_radians
+    native_event = _FakeNativeGestureEvent(
+        Qt.NativeGestureType.RotateNativeGesture,
+        value=0.5,
+    )
+
+    handled = canvas.event(native_event)
+
+    assert handled is True
+    assert canvas.camera.yaw_radians != yaw_before
+    assert canvas.camera.pitch_radians == pitch_before
+
+
+def test_set_running_false_skips_simulation_step() -> None:
+    """When paused, timer tick should not advance simulation time."""
+    canvas = _make_canvas()
+    canvas.set_running(True)
+    canvas._tick()
+    t1 = canvas.system.simulation_time_s
+    canvas.set_running(False)
+    canvas._tick()
+    assert canvas.system.simulation_time_s == t1
 
 
 def test_alt_touchpad_scroll_zooms_instead_of_orbit() -> None:
