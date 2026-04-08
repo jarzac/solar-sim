@@ -5,9 +5,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
+from typing import cast
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QWheelEvent
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QMouseEvent,
+    QNativeGestureEvent,
+    QPainter,
+    QPen,
+    QPointingDevice,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QWidget
 
 from solar_sim.camera import CameraState
@@ -21,6 +30,41 @@ class SimulationCanvas(QWidget):
 
     GRID_HALF_SIZE_AU = 36.0
     GRID_STEP_AU = 2.0
+    _TOUCHPAD_DEVICE_TYPE = QPointingDevice.DeviceType.TouchPad
+    _NATIVE_GESTURE_WHEEL_DEDUP_WINDOW_S = 0.08
+    _TRACKPAD_PIXEL_ZOOM_STEP_DIVISOR = 40.0
+
+    def _apply_trackpad_orbit(self, delta_x: float, delta_y: float) -> None:
+        """Rotate/tilt camera from trackpad pan deltas."""
+        if delta_x == 0.0 and delta_y == 0.0:
+            return
+        self.camera.orbit_by_drag(-delta_x, -delta_y)
+        self.update()
+
+    def _is_touchpad_wheel_event(self, event: QWheelEvent) -> bool:
+        """Return whether wheel event originated from a touchpad."""
+        device = event.pointingDevice()
+        if device is None:
+            return False
+        return device.type() == self._TOUCHPAD_DEVICE_TYPE
+
+    def _should_skip_touchpad_wheel_from_native_gesture(self) -> bool:
+        """Return whether a touchpad wheel event should be ignored."""
+        if self._last_native_gesture_time_s is None:
+            return False
+        elapsed = perf_counter() - self._last_native_gesture_time_s
+        return elapsed <= self._NATIVE_GESTURE_WHEEL_DEDUP_WINDOW_S
+
+    def _wheel_zoom_steps(self, event: QWheelEvent) -> float:
+        """Return zoom steps from wheel/scroll deltas."""
+        angle_delta = event.angleDelta().y()
+        if angle_delta != 0:
+            return angle_delta / 120.0
+
+        pixel_delta = event.pixelDelta().y()
+        if pixel_delta != 0:
+            return pixel_delta / self._TRACKPAD_PIXEL_ZOOM_STEP_DIVISOR
+        return 0.0
 
     def _simulation_datetime(self) -> datetime:
         """Return the current simulation datetime in UTC."""
@@ -88,6 +132,7 @@ class SimulationCanvas(QWidget):
         self._is_running = True
         self._orbit_dragging = False
         self._last_drag_position: QPointF | None = None
+        self._last_native_gesture_time_s: float | None = None
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -185,12 +230,60 @@ class SimulationCanvas(QWidget):
             )
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        """Zoom in or out based on mouse wheel movement."""
+        """Handle wheel controls for zoom and trackpad orbit."""
+        if bool(event.modifiers() & Qt.KeyboardModifier.AltModifier):
+            steps = self._wheel_zoom_steps(event)
+            if steps != 0.0:
+                self.camera.zoom_by_wheel_steps(steps)
+                self.update()
+            event.accept()
+            return
+
+        if self._is_touchpad_wheel_event(event):
+            if self._should_skip_touchpad_wheel_from_native_gesture():
+                event.accept()
+                return
+            pixel_delta = event.pixelDelta()
+            if pixel_delta.isNull():
+                angle_delta = event.angleDelta()
+                self._apply_trackpad_orbit(angle_delta.x() / 8.0, angle_delta.y() / 8.0)
+            else:
+                self._apply_trackpad_orbit(pixel_delta.x(), pixel_delta.y())
+            event.accept()
+            return
+
         steps = event.angleDelta().y() / 120.0
         if steps != 0.0:
             self.camera.zoom_by_wheel_steps(steps)
             self.update()
         event.accept()
+
+    def event(self, event: QEvent) -> bool:
+        """Handle native trackpad gestures for orbit and zoom."""
+        if event.type() != QEvent.Type.NativeGesture:
+            return super().event(event)
+
+        native = cast(QNativeGestureEvent, event)
+        gesture = native.gestureType()
+        if gesture == Qt.NativeGestureType.PanNativeGesture:
+            self._last_native_gesture_time_s = perf_counter()
+            pan = native.delta()
+            self._apply_trackpad_orbit(pan.x(), pan.y())
+            native.accept()
+            return True
+        if gesture == Qt.NativeGestureType.ZoomNativeGesture:
+            self._last_native_gesture_time_s = perf_counter()
+            self.camera.zoom_by_wheel_steps(native.value() * 4.0)
+            self.update()
+            native.accept()
+            return True
+        if gesture == Qt.NativeGestureType.RotateNativeGesture:
+            self._last_native_gesture_time_s = perf_counter()
+            self.camera.orbit_by_drag(native.value() * 18.0, 0.0)
+            self.update()
+            native.accept()
+            return True
+        return super().event(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Start orbit interaction when middle mouse button is pressed."""

@@ -59,6 +59,9 @@ mypy src
 - Camera controls on the simulation canvas:
   - Mouse wheel to zoom in/out
   - Middle mouse drag to rotate and tilt around the sun
+  - Two-finger trackpad pan to rotate and tilt
+  - Trackpad pinch to zoom
+  - Hold Alt (Option on macOS) while scrolling to force zoom
 - A solar-plane grid box that rotates/tilts with camera movement
 - View mode toggle:
   - Orthographic
