@@ -71,6 +71,21 @@ class SimulationCanvas(QWidget):
         base = datetime.combine(self.settings.start_date, datetime.min.time(), tzinfo=UTC)
         return base + timedelta(seconds=self.system.simulation_time_s)
 
+    def _system_center_of_mass(self) -> Vector3:
+        """Return the current barycenter of all simulated bodies."""
+        total_mass = 0.0
+        weighted_x = 0.0
+        weighted_y = 0.0
+        weighted_z = 0.0
+        for body in self.system.bodies:
+            total_mass += body.mass_kg
+            weighted_x += body.position_m.x * body.mass_kg
+            weighted_y += body.position_m.y * body.mass_kg
+            weighted_z += body.position_m.z * body.mass_kg
+        if total_mass == 0.0:
+            return Vector3(0.0, 0.0, 0.0)
+        return Vector3(weighted_x / total_mass, weighted_y / total_mass, weighted_z / total_mass)
+
     def _draw_simulation_clock(self, painter: QPainter) -> None:
         """Draw current simulation datetime in the top-left corner."""
         sim_time = self._simulation_datetime()
@@ -165,8 +180,10 @@ class SimulationCanvas(QWidget):
 
     def _to_screen_point(self, position_m: Vector3) -> QPointF:
         """Convert world meters to screen coordinates."""
+        center_of_mass = self._system_center_of_mass()
+        camera_space = position_m - center_of_mass
         screen = self.camera.project_to_screen(
-            position_m,
+            camera_space,
             self.width(),
             self.height(),
             self.settings.meters_per_pixel,

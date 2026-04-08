@@ -18,7 +18,7 @@ class CameraState:
     yaw_radians: float = 0.0
     pitch_radians: float = 0.35
     min_zoom: float = 0.1
-    max_zoom: float = 25.0
+    max_zoom: float = 100.0
     min_pitch_radians: float = -(pi * 0.5)
     max_pitch_radians: float = pi * 0.5
     perspective_focal_length_px: float = 1200.0

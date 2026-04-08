@@ -198,6 +198,40 @@ def test_native_zoom_gesture_updates_camera_zoom() -> None:
     assert canvas.camera.zoom_factor > before
 
 
+def test_screen_projection_is_centered_on_system_center_of_mass() -> None:
+    """A body's projected x should be relative to system barycenter."""
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    body_a = CelestialBody(
+        name="A",
+        mass_kg=2.0,
+        radius_m=1.0,
+        color_hex="#ffffff",
+        position_m=Vector3(4.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    body_b = CelestialBody(
+        name="B",
+        mass_kg=1.0,
+        radius_m=1.0,
+        color_hex="#ffffff",
+        position_m=Vector3(-2.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    canvas = SimulationCanvas(
+        SolarSystem([body_a, body_b]),
+        SimulationSettings(meters_per_pixel=1.0, projection_mode="orthographic"),
+    )
+    canvas.camera.yaw_radians = 0.0
+    canvas.camera.pitch_radians = 0.0
+    canvas.resize(1000, 800)
+
+    center_of_mass = ((body_a.position_m.x * body_a.mass_kg) + (body_b.position_m.x * body_b.mass_kg)) / 3.0
+    point_a = canvas._to_screen_point(body_a.position_m)
+    expected_x = (canvas.width() * 0.5) + (body_a.position_m.x - center_of_mass)
+    assert point_a.x() == expected_x
+
+
 def test_alt_touchpad_scroll_zooms_instead_of_orbit() -> None:
     """Holding Alt/Option should force wheel input to zoom."""
     canvas = _make_canvas()
