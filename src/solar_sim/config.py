@@ -7,6 +7,7 @@ from datetime import date
 from typing import Literal
 
 ProjectionMode = Literal["orthographic", "perspective"]
+DEFAULT_TIME_SCALE_SECONDS_PER_SECOND = 1_000.0
 
 
 @dataclass(slots=True)
@@ -14,7 +15,7 @@ class SimulationSettings:
     """Mutable simulation settings controlled by the UI."""
 
     gravity_multiplier: float = 1.0
-    time_scale_seconds_per_second: float = 864_000.0
+    time_scale_seconds_per_second: float = DEFAULT_TIME_SCALE_SECONDS_PER_SECOND
     show_orbits: bool = True
     show_labels: bool = True
     projection_mode: ProjectionMode = "perspective"

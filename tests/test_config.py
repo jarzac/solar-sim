@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from solar_sim.config import SimulationSettings
+from solar_sim.config import DEFAULT_TIME_SCALE_SECONDS_PER_SECOND, SimulationSettings
 
 
 def test_set_gravity_multiplier_clamps_to_zero() -> None:
@@ -38,7 +38,7 @@ def test_projection_mode_updates() -> None:
 def test_defaults_match_ui_expectations() -> None:
     """Default settings should match startup control defaults."""
     settings = SimulationSettings()
-    assert settings.time_scale_seconds_per_second == 864_000.0
+    assert settings.time_scale_seconds_per_second == DEFAULT_TIME_SCALE_SECONDS_PER_SECOND
     assert settings.projection_mode == "perspective"
 
 
@@ -64,7 +64,7 @@ def test_meters_per_pixel_default() -> None:
 
 
 def test_set_time_scale_accepts_upper_range() -> None:
-    """Time scale setter should allow large values up to UI maximum."""
+    """Time scale setter should allow large internal values beyond UI presets."""
     settings = SimulationSettings()
     settings.set_time_scale(5_000_000.0)
     assert settings.time_scale_seconds_per_second == 5_000_000.0

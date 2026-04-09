@@ -3,14 +3,34 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QDate
-from PySide6.QtWidgets import QApplication, QCheckBox, QDateEdit, QDoubleSpinBox, QPushButton
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDateEdit,
+    QDoubleSpinBox,
+    QLabel,
+    QPushButton,
+    QSlider,
+)
 
-from solar_sim.ui_controls import ControlPanel
+from solar_sim.config import DEFAULT_TIME_SCALE_SECONDS_PER_SECOND
+from solar_sim.ui_controls import (
+    TIME_SPEED_MULTIPLIERS,
+    ControlPanel,
+    format_speed_multiplier,
+    slider_index_for_speed_multiplier,
+    speed_multiplier_for_slider_index,
+)
 
 
 def _qapp() -> QApplication:
     """Return shared QApplication for widget tests."""
     return QApplication.instance() or QApplication([])
+
+
+def _speed_label(panel: ControlPanel) -> QLabel:
+    """Return the dynamic speed readout label."""
+    return next(label for label in panel.findChildren(QLabel) if label.text().startswith("Speed:"))
 
 
 def test_gravity_spinbox_emits_multiplier() -> None:
@@ -28,19 +48,79 @@ def test_gravity_spinbox_emits_multiplier() -> None:
     assert received == [2.5]
 
 
-def test_time_scale_spinbox_emits_value() -> None:
-    """Changing sim seconds per real second should emit time_scale_changed."""
+def test_speed_slider_emits_mapped_multiplier() -> None:
+    """Changing the discrete speed slider should emit the mapped multiplier."""
     _ = _qapp()
     panel = ControlPanel()
     received: list[float] = []
     panel.time_scale_changed.connect(received.append)
 
-    spin_boxes = panel.findChildren(QDoubleSpinBox)
-    assert len(spin_boxes) >= 2
-    time_scale = spin_boxes[1]
-    time_scale.setValue(100_000.0)
+    slider = panel.findChild(QSlider)
+    assert slider is not None
+    slider.setValue(slider_index_for_speed_multiplier(5_000.0))
 
+    assert received == [5_000.0]
+
+
+def test_speed_preset_button_sets_slider_and_emits_value() -> None:
+    """Preset buttons should update the slider, label, and emitted multiplier."""
+    _ = _qapp()
+    panel = ControlPanel()
+    received: list[float] = []
+    panel.time_scale_changed.connect(received.append)
+
+    slider = panel.findChild(QSlider)
+    label = _speed_label(panel)
+    assert slider is not None
+    preset = next(button for button in panel.findChildren(QPushButton) if button.text() == "100×")
+
+    preset.click()
+
+    assert slider.value() == slider_index_for_speed_multiplier(100.0)
+    assert label.text() == "Speed: 100×"
+    assert received == [100.0]
+
+
+def test_speed_slider_reaches_100000x_and_updates_label() -> None:
+    """Top-end slider position should map to 100000x and update the readout."""
+    _ = _qapp()
+    panel = ControlPanel()
+    received: list[float] = []
+    panel.time_scale_changed.connect(received.append)
+
+    slider = panel.findChild(QSlider)
+    label = _speed_label(panel)
+    assert slider is not None
+    slider.setValue(slider_index_for_speed_multiplier(100_000.0))
+
+    assert slider.value() == len(TIME_SPEED_MULTIPLIERS) - 1
+    assert label.text() == "Speed: 100000×"
     assert received == [100_000.0]
+
+
+def test_speed_label_formats_default_multiplier() -> None:
+    """Default control label should match the configured startup speed."""
+    _ = _qapp()
+    panel = ControlPanel()
+
+    label = _speed_label(panel)
+    assert label.text() == format_speed_multiplier(DEFAULT_TIME_SCALE_SECONDS_PER_SECOND)
+
+
+def test_speed_label_formats_large_values_without_separator() -> None:
+    """Large multiplier labels should keep compact multiplier formatting."""
+    assert format_speed_multiplier(10_000.0) == "Speed: 10000×"
+    assert format_speed_multiplier(100_000.0) == "Speed: 100000×"
+
+
+def test_speed_mapping_helpers_match_configured_levels() -> None:
+    """Discrete slider helpers should round-trip configured speed levels."""
+    for index, multiplier in enumerate(TIME_SPEED_MULTIPLIERS):
+        assert speed_multiplier_for_slider_index(index) == multiplier
+        assert slider_index_for_speed_multiplier(multiplier) == index
+
+    assert 10_000.0 in TIME_SPEED_MULTIPLIERS
+    assert TIME_SPEED_MULTIPLIERS[-1] == 100_000.0
 
 
 def test_show_orbits_checkbox_emits_bool() -> None:

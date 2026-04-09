@@ -5,22 +5,37 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from PySide6.QtCore import QDate
-from PySide6.QtWidgets import QApplication, QCheckBox, QDateEdit, QDoubleSpinBox, QPushButton
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDateEdit,
+    QDoubleSpinBox,
+    QPushButton,
+    QSlider,
+)
 
 from solar_sim.app import MainWindow
 from solar_sim.physics import create_default_solar_system
 from solar_sim.ui_canvas import SimulationCanvas
+from solar_sim.ui_controls import slider_index_for_speed_multiplier
 
 
 def _qapp() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
-def _spinboxes(panel: MainWindow) -> tuple[QDoubleSpinBox, QDoubleSpinBox]:
-    """Return (gravity, time_scale) spin boxes in creation order."""
+def _gravity_spinbox(panel: MainWindow) -> QDoubleSpinBox:
+    """Return the gravity multiplier spin box."""
     spins = panel.findChildren(QDoubleSpinBox)
-    assert len(spins) >= 2
-    return spins[0], spins[1]
+    assert len(spins) >= 1
+    return spins[0]
+
+
+def _speed_slider(panel: MainWindow) -> QSlider:
+    """Return the discrete simulation-speed slider."""
+    slider = panel.findChild(QSlider)
+    assert slider is not None
+    return slider
 
 
 def _check_boxes(panel: MainWindow) -> tuple[QCheckBox, QCheckBox, QCheckBox]:
@@ -35,7 +50,7 @@ def test_gravity_spinbox_updates_system_and_settings() -> None:
     _ = _qapp()
     window = MainWindow()
     try:
-        gravity, _ = _spinboxes(window)
+        gravity = _gravity_spinbox(window)
         gravity.setValue(3.25)
         assert window.settings.gravity_multiplier == 3.25
         assert window.system.gravity_multiplier == 3.25
@@ -43,14 +58,43 @@ def test_gravity_spinbox_updates_system_and_settings() -> None:
         window.close()
 
 
-def test_time_scale_spinbox_updates_settings() -> None:
-    """Sim seconds per real second should update SimulationSettings."""
+def test_speed_slider_updates_settings() -> None:
+    """Discrete speed slider should update SimulationSettings time scale."""
     _ = _qapp()
     window = MainWindow()
     try:
-        _, time_scale = _spinboxes(window)
-        time_scale.setValue(250_000.0)
-        assert window.settings.time_scale_seconds_per_second == 250_000.0
+        slider = _speed_slider(window)
+        slider.setValue(slider_index_for_speed_multiplier(5_000.0))
+        assert window.settings.time_scale_seconds_per_second == 5_000.0
+    finally:
+        window.close()
+
+
+def test_speed_preset_button_updates_slider_and_settings() -> None:
+    """Speed preset buttons should stay in sync with the slider and settings."""
+    _ = _qapp()
+    window = MainWindow()
+    try:
+        slider = _speed_slider(window)
+        preset = next(
+            button for button in window.findChildren(QPushButton) if button.text() == "100×"
+        )
+        preset.click()
+        assert slider.value() == slider_index_for_speed_multiplier(100.0)
+        assert window.settings.time_scale_seconds_per_second == 100.0
+    finally:
+        window.close()
+
+
+def test_speed_slider_can_select_100000x() -> None:
+    """The speed slider should support the highest configured 100000x value."""
+    _ = _qapp()
+    window = MainWindow()
+    try:
+        slider = _speed_slider(window)
+        slider.setValue(slider_index_for_speed_multiplier(100_000.0))
+        assert slider.value() == slider.maximum()
+        assert window.settings.time_scale_seconds_per_second == 100_000.0
     finally:
         window.close()
 
