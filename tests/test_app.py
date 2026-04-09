@@ -33,13 +33,14 @@ def test_main_window_builds_default_system_and_settings() -> None:
     window = MainWindow()
     try:
         assert window.settings.projection_mode == "perspective"
-        assert len(window.system.bodies) == 9
+        assert len(window.system.bodies) == 10
         names = {b.name for b in window.system.bodies}
         assert names == {
             "Sun",
             "Mercury",
             "Venus",
             "Earth",
+            "Moon",
             "Mars",
             "Jupiter",
             "Saturn",

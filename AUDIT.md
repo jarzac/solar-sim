@@ -20,7 +20,7 @@ GitHub Actions (`.github/workflows/ci.yml`): Ubuntu, Python 3.12, `pip install -
 | Area | Module(s) | Notes |
 |------|-----------|--------|
 | App shell | `app.py` | `MainWindow`: wires `ControlPanel` + `SimulationCanvas`, `SimulationSettings`, `SolarSystem`; restart calls `create_default_solar_system` with `settings.start_date` at UTC midnight. |
-| Physics | `physics.py` | N-body gravity, velocity–Verlet `step`, trail sampling and orbital-period-based trail trimming. Default bodies: Sun + Mercury–Neptune from JPL approximate Keplerian tables (see file header and `OrbitalElements` docstring). |
+| Physics | `physics.py` | N-body gravity, velocity–Verlet `step`, trail sampling and orbital-period-based trail trimming. Default bodies: Sun + Mercury–Neptune from JPL approximate Keplerian tables (see file header and `OrbitalElements` docstring), plus the Moon from Earth’s heliocentric state (circular Earth-orbit approximation). |
 | Settings | `config.py` | `SimulationSettings`: gravity, time scale, booleans, `projection_mode`, `meters_per_pixel`, `start_date`. |
 | Camera | `camera.py` | `CameraState`: zoom, yaw/pitch, orthographic vs perspective projection to pixel space. |
 | Canvas | `ui_canvas.py` | Timer-driven `step` + `paintEvent`; center-of-mass offset before projection; wheel / native gesture / middle-button orbit; simulation clock overlay; grid. |

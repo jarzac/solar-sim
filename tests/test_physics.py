@@ -332,7 +332,18 @@ def test_trail_without_orbital_period_not_cut_by_age() -> None:
 
 
 def test_create_default_solar_system_accepts_none_epoch() -> None:
-    """None epoch should use current UTC (smoke: nine bodies returned)."""
+    """None epoch should use current UTC (smoke: Sun + planets + Moon)."""
     system = create_default_solar_system(None)
-    assert len(system.bodies) == 9
+    assert len(system.bodies) == 10
     assert system.bodies[0].name == "Sun"
+
+
+def test_default_system_includes_moon_near_earth() -> None:
+    """Moon should orbit Earth at approximately the mean semi-major axis."""
+    system = create_default_solar_system(datetime(2026, 1, 1, tzinfo=UTC))
+    earth = next(body for body in system.bodies if body.name == "Earth")
+    moon = next(body for body in system.bodies if body.name == "Moon")
+    separation_m = (moon.position_m - earth.position_m).magnitude()
+    assert isclose(separation_m, 384_399_000.0, rel_tol=1e-9)
+    assert moon.orbital_period_s is not None
+    assert moon.orbital_period_s > 0.0

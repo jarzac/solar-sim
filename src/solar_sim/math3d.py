@@ -38,3 +38,11 @@ class Vector3:
         """Return vector length."""
         return sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
 
+    def cross(self, other: Vector3) -> Vector3:
+        """Return the cross product ``self × other``."""
+        return Vector3(
+            self.y * other.z - self.z * other.y,
+            self.z * other.x - self.x * other.z,
+            self.x * other.y - self.y * other.x,
+        )
+

@@ -215,6 +215,57 @@ def _solve_kepler(mean_anomaly_rad: float, eccentricity: float) -> float:
     return eccentric_anomaly
 
 
+def _unit_vector3(vector: Vector3) -> Vector3:
+    """Return a unit vector, raising if the input is effectively zero."""
+    magnitude = vector.magnitude()
+    if magnitude < 1e-300:
+        msg = "Cannot normalize a zero-length vector."
+        raise ValueError(msg)
+    return vector / magnitude
+
+
+# Earth–Moon: mean semi-major axis and sidereal month (circular-orbit approximation).
+_MOON_SEMI_MAJOR_M = 384_399_000.0
+_MOON_SIDEREAL_ORBITAL_PERIOD_S = 27.321661 * 86_400.0
+_MOON_MASS_KG = 7.342e22
+_MOON_RADIUS_M = 1_737_400.0
+
+
+def _moon_celestial_body(earth: CelestialBody) -> CelestialBody:
+    """Build the Moon from Earth's heliocentric state (simple Earth-orbit model).
+
+    Earth orbital elements follow the JPL approximate recipe; those positions are
+    effectively Earth–Moon barycenter–like. Adding the Moon offset from Earth is
+    a standard small-body refinement for visualization.
+    """
+    r_e = earth.position_m
+    v_e = earth.velocity_m_per_s
+    h_vec = r_e.cross(v_e)
+    h_mag = h_vec.magnitude()
+    r_hat = _unit_vector3(r_e)
+    if h_mag < 1e20:
+        n = Vector3(0.0, 0.0, 1.0)
+        tangential = _unit_vector3(n.cross(r_hat))
+    else:
+        n = h_vec / h_mag
+        tangential = _unit_vector3(n.cross(r_hat))
+    r_rel = tangential * _MOON_SEMI_MAJOR_M
+    bitangent = _unit_vector3(n.cross(tangential))
+    v_mag = sqrt(GRAVITATIONAL_CONSTANT * earth.mass_kg / _MOON_SEMI_MAJOR_M)
+    v_rel = bitangent * v_mag
+    trail_sample_period_s = _MOON_SIDEREAL_ORBITAL_PERIOD_S / 1_500.0
+    return CelestialBody(
+        name="Moon",
+        mass_kg=_MOON_MASS_KG,
+        radius_m=_MOON_RADIUS_M,
+        color_hex="#c8c8c8",
+        position_m=r_e + r_rel,
+        velocity_m_per_s=v_e + v_rel,
+        orbital_period_s=_MOON_SIDEREAL_ORBITAL_PERIOD_S,
+        trail_sample_period_s=trail_sample_period_s,
+    )
+
+
 def _state_vectors_from_elements(
     elements: OrbitalElements,
     central_mass_kg: float,
@@ -271,7 +322,7 @@ def _state_vectors_from_elements(
 
 
 def create_default_solar_system(epoch_utc: datetime | None = None) -> SolarSystem:
-    """Create an approximate solar system with inclined elliptical orbits."""
+    """Create an approximate solar system with inclined elliptical planet orbits and the Moon."""
     sun = CelestialBody(
         name="Sun",
         mass_kg=1.9885e30,
@@ -467,5 +518,7 @@ def create_default_solar_system(epoch_utc: datetime | None = None) -> SolarSyste
                 trail_sample_period_s=trail_sample_period_s,
             )
         )
+        if name == "Earth":
+            planets.append(_moon_celestial_body(planets[-1]))
 
     return SolarSystem([sun, *planets])
