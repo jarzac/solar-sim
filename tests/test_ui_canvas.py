@@ -5,7 +5,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QPointingDevice
+from PySide6.QtGui import QMouseEvent, QPointingDevice
 from PySide6.QtWidgets import QApplication
 
 from solar_sim.config import SimulationSettings
@@ -119,20 +119,82 @@ class _FakeNativeGestureEvent:
         self.accepted = True
 
 
-def _make_canvas() -> SimulationCanvas:
-    """Create a simulation canvas with a minimal one-body system."""
+def _make_canvas(
+    system: SolarSystem | None = None,
+    settings: SimulationSettings | None = None,
+) -> SimulationCanvas:
+    """Create a simulation canvas with a configurable test system."""
     app = QApplication.instance() or QApplication([])
     _ = app
-    sun = CelestialBody(
-        name="Sun",
+    if system is None:
+        sun = CelestialBody(
+            name="Sun",
+            mass_kg=1.0,
+            radius_m=1.0,
+            color_hex="#ffffff",
+            position_m=Vector3(0.0, 0.0, 0.0),
+            velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+        )
+        system = SolarSystem([sun])
+    if settings is None:
+        settings = SimulationSettings()
+    return SimulationCanvas(system, settings)
+
+
+def _two_body_canvas() -> tuple[SimulationCanvas, CelestialBody, CelestialBody]:
+    """Create a deterministic two-body canvas for selection tests."""
+    earth = CelestialBody(
+        name="Earth",
+        mass_kg=5.0,
+        radius_m=12.0,
+        color_hex="#5da9ff",
+        position_m=Vector3(100.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    mars = CelestialBody(
+        name="Mars",
         mass_kg=1.0,
-        radius_m=1.0,
-        color_hex="#ffffff",
+        radius_m=9.0,
+        color_hex="#d97b53",
+        position_m=Vector3(-80.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    canvas = _make_canvas(
+        SolarSystem([earth, mars]),
+        SimulationSettings(meters_per_pixel=1.0, projection_mode="orthographic"),
+    )
+    canvas.camera.yaw_radians = 0.0
+    canvas.camera.pitch_radians = 0.0
+    canvas.resize(1000, 800)
+    return canvas, earth, mars
+
+
+def _crowded_label_canvas() -> tuple[SimulationCanvas, CelestialBody, CelestialBody]:
+    """Create a canvas whose default label positions overlap."""
+    mercury = CelestialBody(
+        name="Mercury",
+        mass_kg=1.0,
+        radius_m=6.0,
+        color_hex="#c9c9c9",
         position_m=Vector3(0.0, 0.0, 0.0),
         velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
     )
-    system = SolarSystem([sun])
-    return SimulationCanvas(system, SimulationSettings())
+    venus = CelestialBody(
+        name="Venus",
+        mass_kg=1.0,
+        radius_m=6.0,
+        color_hex="#f2d27b",
+        position_m=Vector3(14.0, 0.0, 0.0),
+        velocity_m_per_s=Vector3(0.0, 0.0, 0.0),
+    )
+    canvas = _make_canvas(
+        SolarSystem([mercury, venus]),
+        SimulationSettings(meters_per_pixel=1.0, projection_mode="orthographic"),
+    )
+    canvas.camera.yaw_radians = 0.0
+    canvas.camera.pitch_radians = 0.0
+    canvas.resize(1000, 800)
+    return canvas, mercury, venus
 
 
 def test_touchpad_wheel_event_with_missing_device_returns_false() -> None:
@@ -233,6 +295,182 @@ def test_screen_projection_is_centered_on_system_center_of_mass() -> None:
     point_a = canvas._to_screen_point(body_a.position_m)
     expected_x = (canvas.width() * 0.5) + (body_a.position_m.x - center_of_mass)
     assert point_a.x() == expected_x
+
+
+def test_camera_focus_defaults_to_system_center_of_mass_without_selection() -> None:
+    """No selection should preserve the existing center-of-mass camera pivot."""
+    canvas, earth, mars = _two_body_canvas()
+
+    expected_focus_x = (
+        (earth.position_m.x * earth.mass_kg) + (mars.position_m.x * mars.mass_kg)
+    ) / (earth.mass_kg + mars.mass_kg)
+
+    assert canvas._selected_body() is None
+    assert canvas._camera_focus_point() == Vector3(expected_focus_x, 0.0, 0.0)
+
+
+def test_select_body_by_name_updates_selected_target_state() -> None:
+    """Selecting by name should resolve the matching live body."""
+    canvas, earth, _mars = _two_body_canvas()
+
+    canvas.select_body_by_name("Earth")
+
+    assert canvas._selected_body_name == "Earth"
+    assert canvas._selected_body() is earth
+
+
+def test_left_click_near_body_selects_expected_target() -> None:
+    """Left click hit testing should select the clicked body."""
+    canvas, earth, _mars = _two_body_canvas()
+    click_position = canvas._to_screen_point(earth.position_m)
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        click_position,
+        click_position,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    canvas.mousePressEvent(event)
+
+    assert canvas._selected_body() is earth
+
+
+def test_clicking_empty_space_clears_selection() -> None:
+    """Left-clicking empty canvas space should clear any active selection."""
+    canvas, earth, _mars = _two_body_canvas()
+    canvas.select_body_by_name(earth.name)
+    empty_position = QPointF(20.0, 30.0)
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        empty_position,
+        empty_position,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    canvas.mousePressEvent(event)
+
+    assert canvas._selected_body() is None
+    assert canvas._selected_body_name is None
+
+
+def test_selected_body_becomes_camera_pivot() -> None:
+    """Selected target should stay centered as the live camera focus point."""
+    canvas, earth, _mars = _two_body_canvas()
+
+    canvas.select_body_by_name(earth.name)
+
+    focus = canvas._camera_focus_point()
+    earth_screen = canvas._to_screen_point(earth.position_m)
+    assert focus == earth.position_m
+    assert earth_screen.x() == canvas.width() * 0.5
+    assert earth_screen.y() == canvas.height() * 0.5
+
+
+def test_selected_target_follows_body_motion() -> None:
+    """Selection should continue tracking the same named body as it moves."""
+    canvas, earth, _mars = _two_body_canvas()
+    canvas.select_body_by_name(earth.name)
+
+    earth.position_m = Vector3(240.0, 80.0, 0.0)
+
+    assert canvas._camera_focus_point() == earth.position_m
+    assert canvas._to_screen_point(earth.position_m) == QPointF(500.0, 400.0)
+
+
+def test_selection_indicator_rect_exists_only_for_selected_body() -> None:
+    """Selection rectangle helper should reflect current selected-body state."""
+    canvas, earth, _mars = _two_body_canvas()
+
+    assert canvas._current_selection_indicator_rect() is None
+
+    canvas.select_body_by_name(earth.name)
+    earth_rect = canvas._current_selection_indicator_rect()
+
+    assert earth_rect is not None
+    assert earth_rect.width() >= canvas._SELECTION_BOX_MIN_SIZE_PX
+    assert earth_rect.contains(canvas._to_screen_point(earth.position_m))
+
+
+def test_non_overlapping_labels_keep_default_near_body_placement() -> None:
+    """Isolated labels should keep the default upper-right candidate."""
+    canvas, earth, mars = _two_body_canvas()
+
+    placements = canvas._resolve_label_placements(canvas.fontMetrics())
+    by_name = {placement.body_name: placement for placement in placements}
+
+    assert by_name["Earth"].candidate_index == 0
+    assert by_name["Earth"].connector_required is False
+    assert by_name["Earth"].rect.left() > by_name["Earth"].body_center.x()
+    assert by_name["Earth"].rect.bottom() < by_name["Earth"].body_center.y()
+    assert by_name["Mars"].candidate_index == 0
+
+
+def test_overlapping_labels_are_reassigned_to_alternate_positions() -> None:
+    """Crowded labels should move away from the default overlapping position."""
+    canvas, mercury, venus = _crowded_label_canvas()
+
+    placements = canvas._resolve_label_placements(canvas.fontMetrics())
+    by_name = {placement.body_name: placement for placement in placements}
+    default_mercury_rect = canvas._label_candidate_rect(
+        by_name["Mercury"].body_center,
+        canvas._body_screen_radius_px(mercury),
+        mercury.name,
+        canvas.fontMetrics(),
+        0,
+    )
+    default_venus_rect = canvas._label_candidate_rect(
+        by_name["Venus"].body_center,
+        canvas._body_screen_radius_px(venus),
+        venus.name,
+        canvas.fontMetrics(),
+        0,
+    )
+
+    assert default_mercury_rect.intersects(default_venus_rect)
+    assert any(placement.candidate_index != 0 for placement in placements)
+    assert not by_name["Mercury"].rect.intersects(by_name["Venus"].rect)
+
+
+def test_connector_state_is_enabled_only_for_displaced_labels() -> None:
+    """Connector lines should be requested only when a label leaves its default slot."""
+    canvas, _mercury, _venus = _crowded_label_canvas()
+
+    placements = canvas._resolve_label_placements(canvas.fontMetrics())
+
+    assert any(placement.connector_required for placement in placements)
+    assert all(
+        placement.connector_required == (placement.candidate_index != 0)
+        for placement in placements
+    )
+
+
+def test_label_placement_is_deterministic_for_same_input() -> None:
+    """The same body arrangement should resolve to the same candidate choices."""
+    canvas_a, _mercury_a, _venus_a = _crowded_label_canvas()
+    canvas_b, _mercury_b, _venus_b = _crowded_label_canvas()
+
+    placements_a = canvas_a._resolve_label_placements(canvas_a.fontMetrics())
+    placements_b = canvas_b._resolve_label_placements(canvas_b.fontMetrics())
+
+    assert [(p.body_name, p.candidate_index) for p in placements_a] == [
+        (p.body_name, p.candidate_index) for p in placements_b
+    ]
+
+
+def test_repeated_layout_evaluation_stays_stable_for_crowded_labels() -> None:
+    """Re-evaluating the same crowded view should not flip label sides."""
+    canvas, _mercury, _venus = _crowded_label_canvas()
+
+    placements_first = canvas._resolve_label_placements(canvas.fontMetrics())
+    placements_second = canvas._resolve_label_placements(canvas.fontMetrics())
+
+    assert [(p.body_name, p.candidate_index) for p in placements_first] == [
+        (p.body_name, p.candidate_index) for p in placements_second
+    ]
 
 
 def test_wheel_zoom_steps_prefers_angle_delta() -> None:

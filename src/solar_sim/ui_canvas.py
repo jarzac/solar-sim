@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import cast
@@ -10,6 +11,7 @@ from typing import cast
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
+    QFontMetrics,
     QMouseEvent,
     QNativeGestureEvent,
     QPainter,
@@ -25,14 +27,44 @@ from solar_sim.math3d import Vector3
 from solar_sim.physics import ASTRONOMICAL_UNIT_METERS, CelestialBody, SolarSystem
 
 
+@dataclass(frozen=True, slots=True)
+class LabelPlacement:
+    """Resolved screen-space label placement for a celestial body."""
+
+    body_name: str
+    body_center: QPointF
+    text: str
+    rect: QRectF
+    text_origin: QPointF
+    candidate_index: int
+    connector_required: bool
+
+
 class SimulationCanvas(QWidget):
     """Widget that updates and draws the simulation world."""
 
     GRID_HALF_SIZE_AU = 36.0
     GRID_STEP_AU = 2.0
+    _BODY_HIT_PADDING_PX = 6.0
+    _BODY_HIT_MIN_RADIUS_PX = 8.0
+    _SELECTION_BOX_PADDING_PX = 5.0
+    _SELECTION_BOX_MIN_SIZE_PX = 14.0
+    _LABEL_BODY_MARGIN_PX = 8.0
+    _LABEL_PADDING_PX = 2.0
+    _LABEL_CONNECTOR_MARGIN_PX = 2.0
     _TOUCHPAD_DEVICE_TYPE = QPointingDevice.DeviceType.TouchPad
     _NATIVE_GESTURE_WHEEL_DEDUP_WINDOW_S = 0.08
     _TRACKPAD_PIXEL_ZOOM_STEP_DIVISOR = 40.0
+    _LABEL_CANDIDATE_SPECS = (
+        (1.0, -1.0, 1.0),
+        (1.0, -1.0, 2.2),
+        (-1.0, -1.0, 1.0),
+        (-1.0, -1.0, 2.2),
+        (1.0, 1.0, 1.0),
+        (1.0, 1.0, 2.2),
+        (-1.0, 1.0, 1.0),
+        (-1.0, 1.0, 2.2),
+    )
 
     def _apply_trackpad_orbit(self, delta_x: float, delta_y: float) -> None:
         """Rotate/tilt camera from trackpad pan deltas."""
@@ -148,6 +180,8 @@ class SimulationCanvas(QWidget):
         self._orbit_dragging = False
         self._last_drag_position: QPointF | None = None
         self._last_native_gesture_time_s: float | None = None
+        self._selected_body_name: str | None = None
+        self._label_candidate_indices_by_body: dict[str, int] = {}
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -175,13 +209,97 @@ class SimulationCanvas(QWidget):
     def set_system(self, system: SolarSystem) -> None:
         """Replace the active system state, used by restart."""
         self.system = system
+        if self._selected_body() is None:
+            self._selected_body_name = None
+        active_body_names = {body.name for body in self.system.bodies}
+        self._label_candidate_indices_by_body = {
+            body_name: candidate_index
+            for body_name, candidate_index in self._label_candidate_indices_by_body.items()
+            if body_name in active_body_names
+        }
         self._last_tick = perf_counter()
         self.update()
 
+    def _selected_body(self) -> CelestialBody | None:
+        """Return the currently selected body, if any."""
+        if self._selected_body_name is None:
+            return None
+        for body in self.system.bodies:
+            if body.name == self._selected_body_name:
+                return body
+        return None
+
+    def select_body_by_name(self, body_name: str | None) -> None:
+        """Select a body by name or clear the current selection."""
+        if body_name is None:
+            self._selected_body_name = None
+        else:
+            self._selected_body_name = None
+            for body in self.system.bodies:
+                if body.name == body_name:
+                    self._selected_body_name = body.name
+                    break
+        self.update()
+
+    def _camera_focus_point(self) -> Vector3:
+        """Return the live world-space pivot for projection and camera interactions."""
+        selected_body = self._selected_body()
+        if selected_body is not None:
+            return selected_body.position_m
+        return self._system_center_of_mass()
+
+    def _body_screen_radius_px(self, body: CelestialBody) -> float:
+        """Return the rendered body radius in screen pixels."""
+        effective_scale = self.camera.effective_meters_per_pixel(self.settings.meters_per_pixel)
+        return max(2.0, body.radius_m / effective_scale)
+
+    def _selection_indicator_rect(self, body: CelestialBody) -> QRectF:
+        """Return a subtle screen-space selection rectangle for a body."""
+        center = self._to_screen_point(body.position_m)
+        diameter = max(
+            self._SELECTION_BOX_MIN_SIZE_PX,
+            (self._body_screen_radius_px(body) * 2.0) + (self._SELECTION_BOX_PADDING_PX * 2.0),
+        )
+        half_size = diameter * 0.5
+        return QRectF(
+            center.x() - half_size,
+            center.y() - half_size,
+            diameter,
+            diameter,
+        )
+
+    def _current_selection_indicator_rect(self) -> QRectF | None:
+        """Return the active selection rectangle, if a body is selected."""
+        selected_body = self._selected_body()
+        if selected_body is None:
+            return None
+        return self._selection_indicator_rect(selected_body)
+
+    def _body_at_screen_position(self, position: QPointF) -> CelestialBody | None:
+        """Return the nearest rendered body hit by a click, if any."""
+        closest_body: CelestialBody | None = None
+        closest_distance_sq: float | None = None
+
+        for body in self.system.bodies:
+            center = self._to_screen_point(body.position_m)
+            delta_x = position.x() - center.x()
+            delta_y = position.y() - center.y()
+            distance_sq = (delta_x * delta_x) + (delta_y * delta_y)
+            hit_radius = max(
+                self._BODY_HIT_MIN_RADIUS_PX,
+                self._body_screen_radius_px(body) + self._BODY_HIT_PADDING_PX,
+            )
+            if distance_sq > hit_radius * hit_radius:
+                continue
+            if closest_distance_sq is None or distance_sq < closest_distance_sq:
+                closest_body = body
+                closest_distance_sq = distance_sq
+
+        return closest_body
+
     def _to_screen_point(self, position_m: Vector3) -> QPointF:
         """Convert world meters to screen coordinates."""
-        center_of_mass = self._system_center_of_mass()
-        camera_space = position_m - center_of_mass
+        camera_space = position_m - self._camera_focus_point()
         screen = self.camera.project_to_screen(
             camera_space,
             self.width(),
@@ -194,6 +312,175 @@ class SimulationCanvas(QWidget):
     def _draw_segment(self, painter: QPainter, start_m: Vector3, end_m: Vector3) -> None:
         """Draw a line segment defined in world-space coordinates."""
         painter.drawLine(self._to_screen_point(start_m), self._to_screen_point(end_m))
+
+    def _label_rect_for_top_left(
+        self,
+        top_left: QPointF,
+        text: str,
+        font_metrics: QFontMetrics,
+    ) -> QRectF:
+        """Return a padded label rectangle for a given top-left position."""
+        text_width = float(font_metrics.horizontalAdvance(text))
+        text_height = float(font_metrics.height())
+        padding = self._LABEL_PADDING_PX
+        return QRectF(
+            top_left.x() - padding,
+            top_left.y() - padding,
+            text_width + (padding * 2.0),
+            text_height + (padding * 2.0),
+        )
+
+    def _label_text_origin_from_rect(
+        self,
+        rect: QRectF,
+        font_metrics: QFontMetrics,
+    ) -> QPointF:
+        """Return drawText origin from a padded label rectangle."""
+        return QPointF(
+            rect.left() + self._LABEL_PADDING_PX,
+            rect.top() + self._LABEL_PADDING_PX + font_metrics.ascent(),
+        )
+
+    def _label_candidate_rect(
+        self,
+        body_center: QPointF,
+        body_radius_px: float,
+        text: str,
+        font_metrics: QFontMetrics,
+        candidate_index: int,
+    ) -> QRectF:
+        """Return a candidate padded label rectangle in screen space."""
+        direction_x, direction_y, distance_scale = self._LABEL_CANDIDATE_SPECS[candidate_index]
+        text_width = float(font_metrics.horizontalAdvance(text))
+        text_height = float(font_metrics.height())
+        margin = body_radius_px + (self._LABEL_BODY_MARGIN_PX * distance_scale)
+
+        if direction_x >= 0.0:
+            top_left_x = body_center.x() + margin
+        else:
+            top_left_x = body_center.x() - margin - text_width
+
+        if direction_y < 0.0:
+            top_left_y = body_center.y() - margin - text_height
+        else:
+            top_left_y = body_center.y() + margin
+
+        return self._label_rect_for_top_left(QPointF(top_left_x, top_left_y), text, font_metrics)
+
+    def _label_conflict_score(
+        self,
+        rect: QRectF,
+        body_name: str,
+        body_center: QPointF,
+        body_radius_px: float,
+        placed: list[LabelPlacement],
+        body_layouts: list[tuple[CelestialBody, QPointF, float]],
+    ) -> int:
+        """Return an integer conflict score for a candidate label rectangle."""
+        score = 0
+        expanded_self_obstacle = QRectF(
+            body_center.x() - body_radius_px - self._LABEL_CONNECTOR_MARGIN_PX,
+            body_center.y() - body_radius_px - self._LABEL_CONNECTOR_MARGIN_PX,
+            (body_radius_px + self._LABEL_CONNECTOR_MARGIN_PX) * 2.0,
+            (body_radius_px + self._LABEL_CONNECTOR_MARGIN_PX) * 2.0,
+        )
+        if rect.intersects(expanded_self_obstacle):
+            score += 1
+
+        for placement in placed:
+            if rect.intersects(placement.rect):
+                score += 3
+
+        for other_body, other_center, other_radius_px in body_layouts:
+            if other_body.name == body_name:
+                continue
+            obstacle = QRectF(
+                other_center.x() - other_radius_px - self._LABEL_CONNECTOR_MARGIN_PX,
+                other_center.y() - other_radius_px - self._LABEL_CONNECTOR_MARGIN_PX,
+                (other_radius_px + self._LABEL_CONNECTOR_MARGIN_PX) * 2.0,
+                (other_radius_px + self._LABEL_CONNECTOR_MARGIN_PX) * 2.0,
+            )
+            if rect.intersects(obstacle):
+                score += 1
+
+        return score
+
+    def _candidate_index_order(self, body_name: str) -> list[int]:
+        """Return a stable candidate preference order for a body label."""
+        candidate_count = len(self._LABEL_CANDIDATE_SPECS)
+        order = list(range(candidate_count))
+        previous_index = self._label_candidate_indices_by_body.get(body_name)
+        if previous_index is None or previous_index >= candidate_count:
+            return order
+        return [previous_index, *[idx for idx in order if idx != previous_index]]
+
+    def _resolve_label_placements(self, font_metrics: QFontMetrics) -> list[LabelPlacement]:
+        """Resolve deterministic screen-space placements for visible body labels."""
+        body_layouts = [
+            (body, self._to_screen_point(body.position_m), self._body_screen_radius_px(body))
+            for body in self.system.bodies
+            if body.name != "Sun"
+        ]
+        placements: list[LabelPlacement] = []
+        next_candidate_indices: dict[str, int] = {}
+
+        for body, body_center, body_radius_px in body_layouts:
+            text = body.name
+            best_candidate_index = 0
+            best_rect = self._label_candidate_rect(
+                body_center,
+                body_radius_px,
+                text,
+                font_metrics,
+                best_candidate_index,
+            )
+            best_score: int | None = None
+
+            for candidate_index in self._candidate_index_order(body.name):
+                candidate_rect = self._label_candidate_rect(
+                    body_center,
+                    body_radius_px,
+                    text,
+                    font_metrics,
+                    candidate_index,
+                )
+                score = self._label_conflict_score(
+                    candidate_rect,
+                    body.name,
+                    body_center,
+                    body_radius_px,
+                    placements,
+                    body_layouts,
+                )
+                if best_score is None or score < best_score:
+                    best_candidate_index = candidate_index
+                    best_rect = candidate_rect
+                    best_score = score
+                if score == 0:
+                    break
+
+            next_candidate_indices[body.name] = best_candidate_index
+            placements.append(
+                LabelPlacement(
+                    body_name=body.name,
+                    body_center=body_center,
+                    text=text,
+                    rect=best_rect,
+                    text_origin=self._label_text_origin_from_rect(best_rect, font_metrics),
+                    candidate_index=best_candidate_index,
+                    connector_required=best_candidate_index != 0,
+                )
+            )
+
+        self._label_candidate_indices_by_body = next_candidate_indices
+        return placements
+
+    def _connector_endpoint_for_label(self, placement: LabelPlacement) -> QPointF:
+        """Return the point on the label rectangle edge nearest the body center."""
+        return QPointF(
+            max(placement.rect.left(), min(placement.body_center.x(), placement.rect.right())),
+            max(placement.rect.top(), min(placement.body_center.y(), placement.rect.bottom())),
+        )
 
     def _draw_solar_plane_grid(self, painter: QPainter) -> None:
         """Draw a square grid representing the solar-system orbital plane."""
@@ -304,6 +591,11 @@ class SimulationCanvas(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Start orbit interaction when middle mouse button is pressed."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            hit_body = self._body_at_screen_position(event.position())
+            self.select_body_by_name(hit_body.name if hit_body is not None else None)
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.MiddleButton:
             self._orbit_dragging = True
             self._last_drag_position = event.position()
@@ -349,14 +641,37 @@ class SimulationCanvas(QWidget):
                 self._draw_trail(painter, body, self._to_screen_point)
 
         painter.setPen(Qt.PenStyle.NoPen)
-        effective_scale = self.camera.effective_meters_per_pixel(self.settings.meters_per_pixel)
+        selected_body = self._selected_body()
+        selection_rect = self._current_selection_indicator_rect()
+        label_placements: list[LabelPlacement] = []
+        if self.settings.show_labels:
+            label_placements = self._resolve_label_placements(painter.fontMetrics())
         for body in self.system.bodies:
             center = self._to_screen_point(body.position_m)
-            radius_px = max(2.0, body.radius_m / effective_scale)
+            radius_px = self._body_screen_radius_px(body)
             painter.setBrush(QColor(body.color_hex))
             painter.drawEllipse(center, radius_px, radius_px)
 
-            if self.settings.show_labels and body.name != "Sun":
-                painter.setPen(QColor("#f0f4ff"))
-                painter.drawText(center + QPointF(8.0, -8.0), body.name)
+            if selected_body is body and selection_rect is not None:
+                selection_pen = QPen(QColor(220, 235, 255, 135))
+                selection_pen.setWidth(1)
+                painter.setPen(selection_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(selection_rect)
                 painter.setPen(Qt.PenStyle.NoPen)
+
+        if not self.settings.show_labels:
+            return
+
+        connector_pen = QPen(QColor(205, 220, 255, 85))
+        connector_pen.setWidth(1)
+        text_color = QColor("#f0f4ff")
+        for placement in label_placements:
+            if placement.connector_required:
+                painter.setPen(connector_pen)
+                painter.drawLine(
+                    placement.body_center,
+                    self._connector_endpoint_for_label(placement),
+                )
+            painter.setPen(text_color)
+            painter.drawText(placement.text_origin, placement.text)
